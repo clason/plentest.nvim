@@ -1,9 +1,8 @@
-local Path = require('plentest.path')
 local Job = require('plentest.job')
 
 local plentest_dir = vim.fn.fnamemodify(debug.getinfo(1).source:match('@?(.*[/\\])'), ':p:h:h:h')
 
-local harness = {}
+local M = {}
 
 local print_output = vim.schedule_wrap(function(_, ...)
   for _, v in ipairs({ ... }) do
@@ -53,10 +52,7 @@ local function test_paths(paths, opts)
     end
 
     table.insert(args, '-c')
-    table.insert(
-      args,
-      string.format('lua require("busted").run("%s")', p:absolute():gsub('\\', '\\\\'))
-    )
+    table.insert(args, string.format('lua require("busted").run("%s")', vim.fs.abspath(p)))
 
     local job = Job:new({
       command = opts.nvim_cmd,
@@ -84,7 +80,7 @@ local function test_paths(paths, opts)
         vim.cmd('mode')
       end),
     })
-    job.nvim_busted_path = p.filename
+    job.nvim_busted_path = p
     return job
   end, paths)
 
@@ -123,69 +119,17 @@ local function test_paths(paths, opts)
   return vim.cmd('0cq')
 end
 
-function harness.test_directory(directory, opts)
+function M.test_directory(directory, opts)
   print('Starting...')
-  directory = directory:gsub('\\', '/')
-  local paths = harness._find_files_to_run(directory)
-
-  -- Paths work strangely on Windows, so lets have abs paths
-  if vim.fn.has('win32') == 1 or vim.fn.has('win64') == 1 then
-    paths = vim.tbl_map(function(p)
-      return Path:new(directory, p.filename)
-    end, paths)
-  end
+  local paths = vim.fs.find(function(name)
+    return vim.glob.to_lpeg('*_spec.lua'):match(name)
+  end, { path = directory, type = 'file', limit = math.huge })
 
   test_paths(paths, opts)
 end
 
-function harness.test_file(filepath)
-  test_paths({ Path:new(filepath) })
+function M.test_file(filepath)
+  test_paths({ filepath })
 end
 
-function harness._find_files_to_run(directory)
-  local finder
-  if vim.fn.has('win32') == 1 or vim.fn.has('win64') == 1 then
-    -- On windows use powershell Get-ChildItem instead
-    local cmd = vim.fn.executable('pwsh.exe') == 1 and 'pwsh' or 'powershell'
-    finder = Job:new({
-      command = cmd,
-      args = { '-NoProfile', '-Command', [[Get-ChildItem -Recurse -n -Filter "*_spec.lua"]] },
-      cwd = directory,
-    })
-  else
-    -- everywhere else use find
-    finder = Job:new({
-      command = 'find',
-      args = { directory, '-type', 'f', '-name', '*_spec.lua' },
-    })
-  end
-
-  return vim.tbl_map(Path.new, finder:sync(vim.env.PLENTEST_TIMEOUT))
-end
-
-function harness._run_path(test_type, directory)
-  local paths = harness._find_files_to_run(directory)
-
-  local bufnr = 0
-  local win_id = 0
-
-  for _, p in pairs(paths) do
-    print(' ')
-    print('Loading Tests For: ', p:absolute(), '\n')
-
-    local ok, _ = pcall(function()
-      dofile(p:absolute())
-    end)
-
-    if not ok then
-      print('Failed to load file')
-    end
-  end
-
-  harness:run(test_type, bufnr, win_id)
-  vim.cmd('qa!')
-
-  return paths
-end
-
-return harness
+return M
